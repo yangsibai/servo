@@ -56,7 +56,7 @@ use libc::c_void;
 use msg::constellation_msg::{FrameId, FrameType, Image, Key, KeyModifiers, KeyState, LoadData};
 use msg::constellation_msg::{PipelineId, PipelineNamespaceId, ReferrerPolicy};
 use msg::constellation_msg::{TraversalDirection, WindowSizeType};
-use net_traits::{LoadOrigin, ResourceThreads};
+use net_traits::ResourceThreads;
 use net_traits::bluetooth_thread::BluetoothMethodMsg;
 use net_traits::image_cache_thread::ImageCacheThread;
 use net_traits::response::HttpsState;
@@ -683,16 +683,4 @@ pub struct WorkerScriptLoadOrigin {
     pub referrer_policy: Option<ReferrerPolicy>,
     /// the pipeline id of the entity requesting the load
     pub pipeline_id: Option<PipelineId>
-}
-
-impl LoadOrigin for WorkerScriptLoadOrigin {
-    fn referrer_url(&self) -> Option<Url> {
-        self.referrer_url.clone()
-    }
-    fn referrer_policy(&self) -> Option<ReferrerPolicy> {
-        self.referrer_policy.clone()
-    }
-    fn pipeline_id(&self) -> Option<PipelineId> {
-        self.pipeline_id.clone()
-    }
 }
