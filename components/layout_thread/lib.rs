@@ -1111,7 +1111,8 @@ impl LayoutThread {
 
         // Calculate the actual viewport as per DEVICE-ADAPT § 6
         let device = Device::new(MediaType::Screen, initial_viewport);
-        Arc::get_mut(&mut rw_data.stylist).unwrap().set_device(device, &data.document_stylesheets);
+        Arc::get_mut(&mut rw_data.stylist).unwrap()
+            .set_device(device, &data.document_stylesheets);
 
         let constraints = rw_data.stylist.viewport_constraints().clone();
         self.viewport_size = match constraints {
@@ -1192,6 +1193,8 @@ impl LayoutThread {
                                                                          data.reflow_info.goal);
 
         if node.is_dirty() || node.has_dirty_descendants() {
+            debug!("Restyling from the root, dirty: {}, has_dirty_descendants: {}",
+                   node.is_dirty(), node.has_dirty_descendants());
             // Recalculate CSS styles and rebuild flows and fragments.
             profile(time::ProfilerCategory::LayoutStyleRecalc,
                     self.profiler_metadata(),

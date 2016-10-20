@@ -1542,6 +1542,8 @@ impl ScriptThread {
             }
         }
 
+        node.dirty(NodeDamage::NodeStyleDamaged);
+
         let init = TransitionEventInit {
             parent: EventInit {
                 bubbles: true,
