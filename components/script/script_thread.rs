@@ -646,30 +646,6 @@ impl ScriptThread {
         use self::MixedMessage::{FromConstellation, FromDevtools, FromImageCache};
         use self::MixedMessage::{FromScheduler, FromScript};
 
-        // Handle pending resize events.
-        // Gather them first to avoid a double mut borrow on self.
-        let mut resizes = vec!();
-
-        let context = self.browsing_context.get();
-        if let Some(context) = context {
-            for context in context.iter() {
-                // Only process a resize if layout is idle.
-                let window = context.active_window();
-                let resize_event = window.steal_resize_event();
-                match resize_event {
-                    Some(size) => resizes.push((window.upcast::<GlobalScope>().pipeline_id(), size)),
-                    None => ()
-                }
-            }
-        }
-
-        for (id, (size, size_type)) in resizes {
-            self.handle_event(id, ResizeEvent(size, size_type));
-        }
-
-        // Store new resizes, and gather all other events.
-        let mut sequential = vec![];
-
         // Receive at least one message so we don't spinloop.
         let mut event = {
             let sel = Select::new();
@@ -703,9 +679,18 @@ impl ScriptThread {
             }
         };
 
-        // Squash any pending resize, reflow, animation tick, and mouse-move events in the queue.
+        // Sort any pending resize, reflow, animation tick, transition event,
+        // and mouse-move events in the queue.
+        //
+        // Dispatch them in order per:
+        // https://html.spec.whatwg.org/multipage/webappapis.html#run-css-animations-and-send-events
+        //
+        // FIXME: Lots to do here.
+        let mut sequential = vec![];
         let mut mouse_move_event_index = None;
-        let mut animation_ticks = HashSet::new();
+        let mut pipelines_to_tick = HashSet::new();
+        let mut resizes = HashMap::new();
+        let mut transition_events = vec![];
         loop {
             match event {
                 // This has to be handled before the ResizeMsg below,
@@ -718,9 +703,7 @@ impl ScriptThread {
                     })
                 }
                 FromConstellation(ConstellationControlMsg::Resize(id, size, size_type)) => {
-                    self.profile_event(ScriptThreadEventCategory::Resize, || {
-                        self.handle_resize(id, size, size_type);
-                    })
+                    resizes.insert(id, (size, size_type));
                 }
                 FromConstellation(ConstellationControlMsg::Viewport(id, rect)) => {
                     self.profile_event(ScriptThreadEventCategory::SetViewport, || {
@@ -734,10 +717,11 @@ impl ScriptThread {
                 }
                 FromConstellation(ConstellationControlMsg::TickAllAnimations(
                         pipeline_id)) => {
-                    if !animation_ticks.contains(&pipeline_id) {
-                        animation_ticks.insert(pipeline_id);
-                        sequential.push(event);
-                    }
+                    pipelines_to_tick.insert(pipeline_id);
+                }
+                FromConstellation(ConstellationControlMsg::TransitionEnd(
+                        unsafe_node, name, duration)) => {
+                    transition_events.push((unsafe_node, name, duration));
                 }
                 FromConstellation(ConstellationControlMsg::SendEvent(
                         _,
@@ -776,6 +760,26 @@ impl ScriptThread {
                 },
                 Ok(ev) => event = FromConstellation(ev),
             }
+        }
+
+        // Step 5. Resize steps.
+        for (id, (size, size_type)) in resizes {
+            self.handle_resize(id, size, size_type);
+        }
+
+        // FIXME Step 6. Scroll steps.
+        // FIXME Step 7. Media queries.
+
+        // Step 8. CSS animation events.
+        for (unsafe_node, name, duration) in transition_events {
+            self.handle_transition_event(unsafe_node, name, duration);
+        }
+
+        // FIXME Step 8: Fullscreen.
+
+        // Step 9: animation frame callbacks.
+        for pipeline_id in pipelines_to_tick {
+            self.handle_tick_all_animations(pipeline_id);
         }
 
         // Process the gathered events.
@@ -922,10 +926,6 @@ impl ScriptThread {
                 self.handle_focus_iframe_msg(parent_pipeline_id, pipeline_id),
             ConstellationControlMsg::WebDriverScriptCommand(pipeline_id, msg) =>
                 self.handle_webdriver_msg(pipeline_id, msg),
-            ConstellationControlMsg::TickAllAnimations(pipeline_id) =>
-                self.handle_tick_all_animations(pipeline_id),
-            ConstellationControlMsg::TransitionEnd(unsafe_node, name, duration) =>
-                self.handle_transition_event(unsafe_node, name, duration),
             ConstellationControlMsg::WebFontLoaded(pipeline_id) =>
                 self.handle_web_font_loaded(pipeline_id),
             ConstellationControlMsg::DispatchFrameLoadEvent {
@@ -941,8 +941,10 @@ impl ScriptThread {
             msg @ ConstellationControlMsg::Viewport(..) |
             msg @ ConstellationControlMsg::SetScrollState(..) |
             msg @ ConstellationControlMsg::Resize(..) |
-            msg @ ConstellationControlMsg::ExitPipeline(..) =>
-                      panic!("should have handled {:?} already", msg),
+            msg @ ConstellationControlMsg::ExitPipeline(..) |
+            msg @ ConstellationControlMsg::TickAllAnimations(..) |
+            msg @ ConstellationControlMsg::TransitionEnd(..) =>
+                panic!("should have handled {:?} already", msg),
         }
     }
 
@@ -1075,20 +1077,12 @@ impl ScriptThread {
     }
 
     fn handle_resize(&self, id: PipelineId, size: WindowSizeData, size_type: WindowSizeType) {
-        if let Some(ref context) = self.find_child_context(id) {
-            let window = match context.find(id) {
-                Some(browsing_context) => browsing_context.active_window(),
-                None => return warn!("Message sent to closed pipeline {}.", id),
-            };
-            window.set_resize_event(size, size_type);
-            return;
-        }
         let mut loads = self.incomplete_loads.borrow_mut();
         if let Some(ref mut load) = loads.iter_mut().find(|load| load.pipeline_id == id) {
             load.window_size = Some(size);
-            return;
         }
-        warn!("resize sent to nonexistent pipeline");
+
+        self.handle_event(id, ResizeEvent(size, size_type));
     }
 
     fn handle_viewport(&self, id: PipelineId, rect: Rect<f32>) {

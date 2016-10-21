@@ -50,7 +50,7 @@ use js::jsapi::{HandleObject, HandleValue, JSAutoCompartment, JSContext};
 use js::jsapi::{JS_GC, JS_GetRuntime, SetWindowProxy};
 use js::jsval::UndefinedValue;
 use js::rust::Runtime;
-use msg::constellation_msg::{FrameType, LoadData, PipelineId, ReferrerPolicy, WindowSizeType};
+use msg::constellation_msg::{FrameType, LoadData, PipelineId, ReferrerPolicy};
 use net_traits::ResourceThreads;
 use net_traits::bluetooth_thread::BluetoothMethodMsg;
 use net_traits::image_cache_thread::{ImageCacheChan, ImageCacheThread};
@@ -173,9 +173,6 @@ pub struct Window {
     devtools_markers: DOMRefCell<HashSet<TimelineMarkerType>>,
     #[ignore_heap_size_of = "channels are hard"]
     devtools_marker_sender: DOMRefCell<Option<IpcSender<Option<TimelineMarker>>>>,
-
-    /// Pending resize event, if any.
-    resize_event: Cell<Option<(WindowSizeData, WindowSizeType)>>,
 
     /// Parent id associated with this page, if any.
     parent_info: Option<(PipelineId, FrameType)>,
@@ -1359,16 +1356,6 @@ impl Window {
         self.pending_reflow_count.set(self.pending_reflow_count.get() + 1);
     }
 
-    pub fn set_resize_event(&self, event: WindowSizeData, event_type: WindowSizeType) {
-        self.resize_event.set(Some((event, event_type)));
-    }
-
-    pub fn steal_resize_event(&self) -> Option<(WindowSizeData, WindowSizeType)> {
-        let event = self.resize_event.get();
-        self.resize_event.set(None);
-        event
-    }
-
     pub fn set_page_clip_rect_with_new_viewport(&self, viewport: Rect<f32>) -> bool {
         let rect = geometry::f32_rect_to_au_rect(viewport.clone());
         self.current_viewport.set(rect);
@@ -1559,7 +1546,6 @@ impl Window {
             bluetooth_thread: bluetooth_thread,
             page_clip_rect: Cell::new(max_rect()),
             fragment_name: DOMRefCell::new(None),
-            resize_event: Cell::new(None),
             layout_chan: layout_chan,
             layout_rpc: layout_rpc,
             window_size: Cell::new(window_size),
